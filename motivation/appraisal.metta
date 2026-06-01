@@ -3,7 +3,9 @@
 ;; Sits between signal extraction and candidate scoring.
 ;; Computes 6 appraisal dimensions from active signals,
 ;; then uses AppraisalEffect atoms to update modulators M.
-
+;;
+;; MUST NOT directly choose actions.
+;;
 ;; Dimensions:
 ;;   novelty      — how unexpected / unfamiliar the situation is
 ;;   risk         — probability of harm or irreversibility
@@ -11,51 +13,65 @@
 ;;   uncertainty  — ambiguity in correct response
 ;;   opportunity  — positive potential in the situation
 ;;   progress     — closeness to goal completion
+;;
+;; All dimensions are [0,1]; negative SignalAppraisal weights
+;; can produce negative contributions which clamp to 0.
 
-!(bind! &appraisalSpace (new-space))
+!(bind! &appraisal-space (new-space))
 
 (= (clearAppraisal)
-   (clearSpace &appraisalSpace))
+   (clearSpace &appraisal-space))
 
-(= (update-atom $space $oatom $natom) (let $_ (remove-atom $space $oatom) (add-atom $space $natom)))
-
-;; Store a dimension value, replacing any existing entry.
 (= (setAppraisalDim $dim $value)
-   (let $_ (update-atom &appraisalSpace (appraisal $dim $value) (appraisal $dim $value)) 
-   ()
-))
+   (let* (
+      ($existing (collapse (match &appraisal-space (appraisal $dim $_)
+                                 (appraisal $dim $_))))
+      ($_ (if (!= $existing ())
+              (let ((appraisal $d $oldV) (car-atom $existing))
+                 (remove-atom &appraisal-space (appraisal $dim $oldV)))
+              _))
+      ($_ (add-atom &appraisal-space (appraisal $dim $value)))
+   ) ()))
 
-;; Fetch a dimension value; returns 0.0 if not computed yet
 (= (getAppraisalDim $dim)
-   (let $res (collapse (match &appraisalSpace (appraisal $dim $v) $v))
+   (let $res (collapse (match &appraisal-space (appraisal $dim $v) $v))
       (if (== $res ())
           0.0
           (car-atom $res))))
 
-;; Get full appraisal record as a list
 (= (getAppraisal)
-   (collapse (match &appraisalSpace (appraisal $dim $v)
+   (collapse (match &appraisal-space (appraisal $dim $v)
                    (appraisal $dim $v))))
 
-;; Compute one appraisal dimension by summing
-;; (signal_strength × SignalAppraisal_weight) over all active signals.
-(= (computeDimension $dim)
+
+;; signalDimContrib $kind $strength $dim
+;; Returns the contribution of one signal to one appraisal dimension.
+(= (signalDimContrib $kind $strength $dim)
+   (let $weights (collapse (match &self (SignalAppraisal $kind $dim $w) $w))
+      (if (== $weights ())
+          0.0
+          (* $strength (car-atom $weights)))))
+
+;; sumDimFromSignals $dim $signalList $acc
+;; Recursively accumulates dimension value across a list of signal atoms.
+(= (sumDimFromSignals $dim () $acc) $acc)
+(= (sumDimFromSignals $dim $signals $acc)
    (let* (
-      ($contributions (collapse
-         (let (signal $kind $strength)
-              (match &signalSpace (signal $kind $strength)
-                                   (signal $kind $strength))
-            (let $weightRes (collapse (match &self
-                              (SignalAppraisal $kind $dim $w)
-                              $w))
-               (if (== $weightRes ())
-                   (empty)
-                   (* $strength (car-atom $weightRes)))))))
+      (($head $tail) (decons-atom $signals))
+      ((signal $kind $strength) $head)
+      ($contrib (signalDimContrib $kind $strength $dim))
    )
-   (eval (clamp (sumList $contributions 0.0)))))
+   (sumDimFromSignals $dim $tail (+ $acc $contrib))))
+
+;; computeDimension $dim
+;; Computes the final [0,1] value for one appraisal dimension.
+(= (computeDimension $dim)
+   (let $signals (getSignals)
+      (clamp (sumDimFromSignals $dim $signals 0.0))))
+
 
 ;; runAppraisal
-;; 1. Clears previous appraisal annotations.
+;; 1. Clears previous appraisal.
 ;; 2. Computes each of the 6 dimensions from current signals.
 ;; 3. Applies AppraisalEffect atoms to update modulators M.
 ;; 4. Returns appraisal annotation record.
@@ -63,7 +79,7 @@
    (let* (
       ($_ (clearAppraisal))
 
-      ;; compute dimensions
+      ;; Step 1 — compute 6 dimensions (each is a simple parameter call, no nesting)
       ($novelty     (computeDimension novelty))
       ($risk        (computeDimension risk))
       ($importance  (computeDimension importance))
@@ -71,7 +87,7 @@
       ($opportunity (computeDimension opportunity))
       ($progress    (computeDimension progress))
 
-      ;; store dimensions
+      ;; Step 2 — store dimensions
       ($_ (setAppraisalDim novelty     $novelty))
       ($_ (setAppraisalDim risk        $risk))
       ($_ (setAppraisalDim importance  $importance))
@@ -79,8 +95,9 @@
       ($_ (setAppraisalDim opportunity $opportunity))
       ($_ (setAppraisalDim progress    $progress))
 
-      ;; apply AppraisalEffect → update modulators M
-      ;;   For each (AppraisalEffect dim mod scale): adjustModulator mod (dim_val × scale)
+      ;; Step 3 — apply AppraisalEffect → update modulators M.
+      ;; Iterates over AppraisalEffect registry atoms. For each:
+      ;;   adjustModulator mod (dim_value × scale)
       ($_ (collapse
             (let (AppraisalEffect $dim $mod $scale)
                  (match &self (AppraisalEffect $dim $mod $scale)
@@ -88,7 +105,6 @@
                (let $dimVal (getAppraisalDim $dim)
                   (adjustModulator $mod (* $scale $dimVal))))))
    )
-   
    (appraisal
       (novelty     $novelty)
       (risk        $risk)

@@ -111,15 +111,23 @@
 
 (= (replaceGoal $name $newValue)
    (let* (
-      ($old (collapse (match &goal-space (goal $name $_) (goal $name $_))))
-      ($_ (if (!= $old ())
-              (remove-atom &goal-space (car-atom $old))
+      ;; Fetch the exact atom currently in the space so remove-atom
+      ;; receives the same value representation that was stored.
+      ;; Pattern: same as working replaceMotive / replaceModulator.
+      ($existing (collapse (match &goal-space (goal $name $v) (goal $name $v))))
+      ($_ (if (!= $existing ())
+              (let ((goal $n $oldValue) (car-atom $existing))
+                 (remove-atom &goal-space (goal $name $oldValue)))
               _))
       ($_ (add-atom &goal-space (goal $name $newValue)))
    ) ()))
 
 (= (getGoals)
    (collapse (match &goal-space (goal $name $value) (goal $name $value))))
+
+;; fetchAntiGoal — returns the full (anti-goal name value) atom
+(= (fetchAntiGoal $name)
+   (match &goal-space (anti-goal $name $value) (anti-goal $name $value)))
 
 (= (fetchAntiGoalValue $name)
    (let $res (collapse (match &goal-space (anti-goal $name $v) $v))
@@ -129,9 +137,10 @@
 
 (= (replaceAntiGoal $name $newValue)
    (let* (
-      ($old (collapse (match &goal-space (anti-goal $name $_) (anti-goal $name $_))))
-      ($_ (if (!= $old ())
-              (remove-atom &goal-space (car-atom $old))
+      ($existing (collapse (match &goal-space (anti-goal $name $v) (anti-goal $name $v))))
+      ($_ (if (!= $existing ())
+              (let ((anti-goal $n $oldValue) (car-atom $existing))
+                 (remove-atom &goal-space (anti-goal $name $oldValue)))
               _))
       ($_ (add-atom &goal-space (anti-goal $name $newValue)))
    ) ()))
@@ -141,6 +150,10 @@
 
 
 
+;; fetchSelfMetric — returns the full (self-metric name value) atom
+(= (fetchSelfMetric $name)
+   (match &self-model-space (self-metric $name $value) (self-metric $name $value)))
+
 (= (fetchSelfMetricValue $name)
    (let $res (collapse (match &self-model-space (self-metric $name $v) $v))
       (if (== $res ())
@@ -149,9 +162,10 @@
 
 (= (replaceSelfMetric $name $newValue)
    (let* (
-      ($old (collapse (match &self-model-space (self-metric $name $_) (self-metric $name $_))))
-      ($_ (if (!= $old ())
-              (remove-atom &self-model-space (car-atom $old))
+      ($existing (collapse (match &self-model-space (self-metric $name $v) (self-metric $name $v))))
+      ($_ (if (!= $existing ())
+              (let ((self-metric $n $oldValue) (car-atom $existing))
+                 (remove-atom &self-model-space (self-metric $name $oldValue)))
               _))
       ($_ (add-atom &self-model-space (self-metric $name $newValue)))
    ) ()))
