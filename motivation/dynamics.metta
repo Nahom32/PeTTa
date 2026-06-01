@@ -103,3 +103,80 @@
       ($_ (applySignals (getSignals)))
    )
    (motivationSnapshot)))
+
+;; Adjust a goal value by delta, clamped to [0,1].
+(= (adjustGoal $name $delta)
+   (let* (
+      ($current  (fetchGoalValue $name))
+      ($newValue (clamp (+ $current $delta)))
+      ($_ (replaceGoal $name $newValue))
+   )
+   (goal $name $newValue)))
+
+;; Pull a goal value back toward its GoalSpec baseline (same decay law as motives).
+(= (decayGoal $name)
+   (let* (
+      ($current  (fetchGoalValue $name))
+      ($baseline (let $b (collapse (match &self (GoalSpec $name $bl) $bl))
+                     (if (== $b ()) $current (car-atom $b))))
+      ($delta    (* (decayRate) (- $baseline $current)))
+   )
+   (adjustGoal $name $delta)))
+
+;; Decay all goals toward their baselines.
+(= (decayGoalState)
+   (collapse (let (GoalSpec $name $_b)
+                  (match &self (GoalSpec $name $_b) (GoalSpec $name $_b))
+               (decayGoal $name))))
+
+
+;; SELF MODEL UPDATE — S component
+
+;; Exponential moving average alpha for self-model metrics.
+(= (selfModelAlpha) 0.20)
+
+;; Update the self model after each cycle.
+;;   $hadError   — True if the cycle produced an error
+;;   $hadResults — True if the cycle produced non-empty results
+(= (updateSelfModel $hadError $hadResults)
+   (let* (
+      ;; Increment cycle counter
+      ($_ (change-state! &cycle-count (+ (get-state &cycle-count) 1)))
+      ;; Update raw success/failure counts
+      ($_ (if (and $hadResults (not $hadError))
+              (change-state! &success-count (+ (get-state &success-count) 1))
+              _))
+      ($_ (if $hadError
+              (change-state! &failure-count (+ (get-state &failure-count) 1))
+              _))
+
+      ;; Compute instantaneous rates
+      ($cycles   (get-state &cycle-count))
+      ($successes (get-state &success-count))
+      ($failures  (get-state &failure-count))
+      ($instSuccess (if (> $cycles 0) (/ $successes $cycles) 0.5))
+      ($instFailure (if (> $cycles 0) (/ $failures  $cycles) 0.1))
+
+      ;; Apply EMA: new = (1-α)×old + α×inst
+      ($alpha    (selfModelAlpha))
+      ($oldSucc  (fetchSelfMetricValue success_rate))
+      ($oldFail  (fetchSelfMetricValue failure_rate))
+      ($newSucc  (clamp (+ (* (- 1.0 $alpha) $oldSucc) (* $alpha $instSuccess))))
+      ($newFail  (clamp (+ (* (- 1.0 $alpha) $oldFail) (* $alpha $instFailure))))
+      ($_ (replaceSelfMetric success_rate $newSucc))
+      ($_ (replaceSelfMetric failure_rate $newFail))
+
+      ;; Memory confidence: approximated from success rate (scales to [0,1])
+      ($memConf  (clamp (* $newSucc 1.4)))
+      ($_ (replaceSelfMetric memory_confidence $memConf))
+
+      ;; Identity continuity: degrades with failure streak, recovers with success
+      ($streak   (get-state &failure-streak))
+      ($identCont (clamp (- 0.90 (* $streak 0.08))))
+      ($_ (replaceSelfMetric identity_continuity $identCont))
+      
+      ;; Resource usage: proxy — rises with cycle count, plateaus
+      ($resUsage (clamp (/ $cycles (+ $cycles 50.0))))
+      ($_ (replaceSelfMetric resource_usage $resUsage))
+   ) ()))
+
